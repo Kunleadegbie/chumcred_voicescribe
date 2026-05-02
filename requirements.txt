@@ -6,3 +6,4 @@ pandas
 streamlit-audiorecorder
 pydub
 requests
+pyaudioop
