@@ -1,0 +1,8 @@
+streamlit
+supabase
+python-dotenv
+openai
+pandas
+streamlit-audiorecorder
+pydub
+requests
