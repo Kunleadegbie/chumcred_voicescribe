@@ -283,7 +283,17 @@ else:
             else:
                 st.error("Could not create recording session.")
     else:
-        st.success(f"Active recording session: {st.session_state.active_recording_session_id}")
+        st.success("🎙️ Live Recording Session Active")
+
+        session_title = title if title else "Untitled Recording"
+
+        st.markdown(
+            f"""
+            **Title:** {session_title}  
+            **Category:** {category}  
+            **Status:** Auto-saving audio every 30 seconds
+            """
+        )
 
     st.divider()
     st.subheader("Step 2: Record Audio")
