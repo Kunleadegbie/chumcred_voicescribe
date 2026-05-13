@@ -3,6 +3,8 @@ supabase
 python-dotenv
 openai
 pandas
-streamlit-audiorecorder
-pydub
 requests
+pydub
+streamlit-webrtc
+av
+numpy
