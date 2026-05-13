@@ -1,18 +1,10 @@
 import io
-import time
-import av
-import numpy as np
 import streamlit as st
 from audiorecorder import audiorecorder
 
 from utils.auth import require_login, logout_user
 from utils.supabase_client import get_service_supabase_client
 from utils.audio_storage import upload_audio_to_supabase
-from utils.chunk_storage import (
-    create_recording_session,
-    upload_wav_chunk,
-    finalize_recording_session,
-)
 
 
 st.set_page_config(
@@ -67,11 +59,8 @@ if "unsaved_audio_duration" not in st.session_state:
 if "unsaved_recording_available" not in st.session_state:
     st.session_state.unsaved_recording_available = False
 
-if "active_recording_session_id" not in st.session_state:
-    st.session_state.active_recording_session_id = None
-
-if "active_chunk_index" not in st.session_state:
-    st.session_state.active_chunk_index = 0
+if "unsaved_file_extension" not in st.session_state:
+    st.session_state.unsaved_file_extension = "wav"
 
 
 st.divider()
@@ -104,10 +93,75 @@ recording_mode = st.radio(
     "Select Recording Mode",
     [
         "Short Recording (quick notes under 10 minutes)",
-        "Long Recording (sermons, meetings, lectures)"
+        "Long Recording / Upload Audio"
     ],
     horizontal=True
 )
+
+
+# =====================================================
+# HELPER: SAVE AUDIO TO SUPABASE + DATABASE
+# =====================================================
+def save_recording_to_database(audio_bytes, file_extension, duration_seconds, success_message):
+    if not title:
+        st.error("Please enter a recording title before saving.")
+        st.stop()
+
+    success, message, upload_data = upload_audio_to_supabase(
+        audio_bytes,
+        file_extension
+    )
+
+    if not success:
+        st.error(f"Upload failed: {message}")
+        st.stop()
+
+    record = {
+        "user_id": user_id,
+        "title": title,
+        "category": category,
+        "audio_url": upload_data["storage_path"],
+        "audio_filename": upload_data["filename"],
+        "duration_seconds": duration_seconds,
+        "transcription_status": "not_transcribed",
+        "summary_status": "not_summarized",
+    }
+
+    try:
+        result = supabase.table("voice_recordings").insert(record).execute()
+
+        if not result.data:
+            st.error("Database insert failed. No record was returned.")
+            st.stop()
+
+        saved_record = result.data[0]
+
+        st.session_state.unsaved_audio_bytes = None
+        st.session_state.unsaved_audio_duration = 0
+        st.session_state.unsaved_recording_available = False
+        st.session_state.unsaved_file_extension = "wav"
+
+        st.success(success_message)
+        st.write(f"Saved Recording ID: `{saved_record['id']}`")
+
+        col_a, col_b, col_c = st.columns(3)
+
+        with col_a:
+            if st.button("🎧 Go to My Recordings", use_container_width=True):
+                st.switch_page("pages/03_My_Recordings.py")
+
+        with col_b:
+            if st.button("📝 Transcribe Now", use_container_width=True):
+                st.session_state.selected_recording_id = saved_record["id"]
+                st.switch_page("pages/04_Transcript_View.py")
+
+        with col_c:
+            if st.button("📁 Transcribe Later", use_container_width=True):
+                st.switch_page("pages/03_My_Recordings.py")
+
+    except Exception as e:
+        st.error(f"Database save failed: {e}")
+
 
 # =====================================================
 # SHORT RECORDING MODE - EXISTING FLOW
@@ -127,6 +181,7 @@ if recording_mode == "Short Recording (quick notes under 10 minutes)":
         st.session_state.unsaved_audio_bytes = preview_bytes
         st.session_state.unsaved_audio_duration = round(len(audio) / 1000, 2)
         st.session_state.unsaved_recording_available = True
+        st.session_state.unsaved_file_extension = "wav"
 
     if st.session_state.unsaved_recording_available and st.session_state.unsaved_audio_bytes:
         st.warning("You have an unsaved recording. Save it before leaving or starting another important recording.")
@@ -144,119 +199,88 @@ if recording_mode == "Short Recording (quick notes under 10 minutes)":
 
         with col_save:
             if st.button("💾 Save Recording", use_container_width=True):
-                if not title:
-                    st.error("Please enter a recording title before saving.")
-                    st.stop()
-
-                success, message, upload_data = upload_audio_to_supabase(
+                save_recording_to_database(
                     st.session_state.unsaved_audio_bytes,
-                    "wav"
+                    "wav",
+                    duration_seconds,
+                    "Recording saved successfully."
                 )
-
-                if not success:
-                    st.error(f"Upload failed: {message}")
-                    st.stop()
-
-                record = {
-                    "user_id": user_id,
-                    "title": title,
-                    "category": category,
-                    "audio_url": upload_data["storage_path"],
-                    "audio_filename": upload_data["filename"],
-                    "duration_seconds": duration_seconds,
-                    "transcription_status": "not_transcribed",
-                    "summary_status": "not_summarized",
-                }
-
-                try:
-                    result = supabase.table("voice_recordings").insert(record).execute()
-
-                    if not result.data:
-                        st.error("Database insert failed. No record was returned.")
-                        st.stop()
-
-                    saved_record = result.data[0]
-
-                    st.session_state.unsaved_audio_bytes = None
-                    st.session_state.unsaved_audio_duration = 0
-                    st.session_state.unsaved_recording_available = False
-
-                    st.success("Recording saved successfully.")
-                    st.write(f"Saved Recording ID: `{saved_record['id']}`")
-
-                    col_a, col_b, col_c = st.columns(3)
-
-                    with col_a:
-                        if st.button("🎧 Go to My Recordings", use_container_width=True):
-                            st.switch_page("pages/03_My_Recordings.py")
-
-                    with col_b:
-                        if st.button("📝 Transcribe Now", use_container_width=True):
-                            st.session_state.selected_recording_id = saved_record["id"]
-                            st.switch_page("pages/04_Transcript_View.py")
-
-                    with col_c:
-                        if st.button("📁 Transcribe Later", use_container_width=True):
-                            st.switch_page("pages/03_My_Recordings.py")
-
-                except Exception as e:
-                    st.error(f"Database save failed: {e}")
 
         with col_clear:
             if st.button("🗑️ Clear Unsaved Recording", use_container_width=True):
                 st.session_state.unsaved_audio_bytes = None
                 st.session_state.unsaved_audio_duration = 0
                 st.session_state.unsaved_recording_available = False
+                st.session_state.unsaved_file_extension = "wav"
                 st.success("Unsaved recording cleared.")
                 st.rerun()
 
     else:
         st.warning("No recording yet.")
 
+
 # =====================================================
-# LONG RECORDING MODE - TEMPORARY SAFE MODE
+# LONG RECORDING / UPLOAD AUDIO MODE
 # =====================================================
 else:
     st.info(
-        "Long Recording Mode is currently using the stable browser recorder while WebRTC is disabled. "
-        "Please save immediately after stopping the recording."
+        "For long sermons, meetings, lectures, and trainings, the safest option is to record with your phone recorder "
+        "or device voice recorder, then upload the audio here for transcription."
     )
 
-    st.subheader("Step 1: Create Recording Session")
+    st.warning(
+        "Browser-based long recording can fail on some mobile devices. "
+        "To avoid losing important messages, use Upload Audio for long recordings."
+    )
 
-    if not st.session_state.active_recording_session_id:
-        if st.button("🎙️ Create Recording Session", use_container_width=True):
-            if not title:
-                st.error("Please enter a recording title first.")
-                st.stop()
+    long_option = st.radio(
+        "Choose Long Recording Method",
+        [
+            "Upload existing audio file",
+            "Record in browser and save immediately"
+        ],
+        horizontal=True
+    )
 
-            session = create_recording_session(user_id, title, category)
-
-            if session:
-                st.session_state.active_recording_session_id = session["id"]
-                st.session_state.active_chunk_index = 0
-                st.success("Recording session created. Now start the recorder below.")
-                st.rerun()
-            else:
-                st.error("Could not create recording session.")
-    else:
-        st.success("🎙️ Live Recording Session Active")
-
-        session_title = title if title else "Untitled Recording"
-
-        st.markdown(
-            f"""
-            **Title:** {session_title}  
-            **Category:** {category}  
-            **Status:** Stable recording mode active. Save immediately after stopping.
-            """
+    # -------------------------------------------------
+    # OPTION 1: UPLOAD EXISTING AUDIO FILE
+    # -------------------------------------------------
+    if long_option == "Upload existing audio file":
+        uploaded_audio = st.file_uploader(
+            "Upload audio file",
+            type=["wav", "mp3", "m4a", "webm", "ogg", "aac"]
         )
 
-    st.divider()
-    st.subheader("Step 2: Record Audio")
+        estimated_duration = st.number_input(
+            "Duration in seconds",
+            min_value=0.0,
+            value=0.0,
+            step=1.0,
+            help="Optional but useful for subscription minute tracking. Example: 45 minutes = 2700 seconds."
+        )
 
-    if st.session_state.active_recording_session_id:
-        st.warning("Click Start to begin recording. Click Stop when you are done. Then save immediately.")
+        if uploaded_audio:
+            file_bytes = uploaded_audio.getvalue()
+            file_extension = uploaded_audio.name.split(".")[-1].lower()
+
+            st.success("Audio file loaded successfully.")
+            st.audio(file_bytes)
+
+            if st.button("💾 Save Uploaded Audio", use_container_width=True):
+                save_recording_to_database(
+                    file_bytes,
+                    file_extension,
+                    estimated_duration,
+                    "Uploaded audio saved successfully."
+                )
+
+    # -------------------------------------------------
+    # OPTION 2: BROWSER LONG RECORDING
+    # -------------------------------------------------
+    else:
+        st.warning(
+            "Use this only after testing. For very important 30–60 minute messages, upload from your phone recorder is safer."
+        )
 
         audio = audiorecorder("🎙️ Start Long Recording", "⏹️ Stop Long Recording")
 
@@ -270,8 +294,11 @@ else:
             st.session_state.unsaved_audio_bytes = preview_bytes
             st.session_state.unsaved_audio_duration = round(len(audio) / 1000, 2)
             st.session_state.unsaved_recording_available = True
+            st.session_state.unsaved_file_extension = "wav"
 
         if st.session_state.unsaved_recording_available and st.session_state.unsaved_audio_bytes:
+            st.warning("You have an unsaved long recording. Save it immediately.")
+
             st.subheader("Playback")
             st.audio(st.session_state.unsaved_audio_bytes, format="audio/wav")
 
@@ -285,97 +312,21 @@ else:
 
             with col_save:
                 if st.button("💾 Save Long Recording", use_container_width=True):
-                    if not title:
-                        st.error("Please enter a recording title before saving.")
-                        st.stop()
-
-                    success, message, upload_data = upload_audio_to_supabase(
+                    save_recording_to_database(
                         st.session_state.unsaved_audio_bytes,
-                        "wav"
+                        "wav",
+                        duration_seconds,
+                        "Long recording saved successfully."
                     )
-
-                    if not success:
-                        st.error(f"Upload failed: {message}")
-                        st.stop()
-
-                    record = {
-                        "user_id": user_id,
-                        "title": title,
-                        "category": category,
-                        "audio_url": upload_data["storage_path"],
-                        "audio_filename": upload_data["filename"],
-                        "duration_seconds": duration_seconds,
-                        "transcription_status": "not_transcribed",
-                        "summary_status": "not_summarized",
-                    }
-
-                    try:
-                        result = supabase.table("voice_recordings").insert(record).execute()
-
-                        if not result.data:
-                            st.error("Database insert failed. No record was returned.")
-                            st.stop()
-
-                        saved_record = result.data[0]
-
-                        finalize_recording_session(st.session_state.active_recording_session_id)
-
-                        st.session_state.unsaved_audio_bytes = None
-                        st.session_state.unsaved_audio_duration = 0
-                        st.session_state.unsaved_recording_available = False
-                        st.session_state.active_recording_session_id = None
-                        st.session_state.active_chunk_index = 0
-
-                        st.success("Long recording saved successfully.")
-                        st.write(f"Saved Recording ID: `{saved_record['id']}`")
-
-                        col_a, col_b, col_c = st.columns(3)
-
-                        with col_a:
-                            if st.button("🎧 Go to My Recordings", use_container_width=True):
-                                st.switch_page("pages/03_My_Recordings.py")
-
-                        with col_b:
-                            if st.button("📝 Transcribe Now", use_container_width=True):
-                                st.session_state.selected_recording_id = saved_record["id"]
-                                st.switch_page("pages/04_Transcript_View.py")
-
-                        with col_c:
-                            if st.button("📁 Transcribe Later", use_container_width=True):
-                                st.switch_page("pages/03_My_Recordings.py")
-
-                    except Exception as e:
-                        st.error(f"Database save failed: {e}")
 
             with col_clear:
                 if st.button("🗑️ Clear Unsaved Long Recording", use_container_width=True):
                     st.session_state.unsaved_audio_bytes = None
                     st.session_state.unsaved_audio_duration = 0
                     st.session_state.unsaved_recording_available = False
+                    st.session_state.unsaved_file_extension = "wav"
                     st.success("Unsaved long recording cleared.")
                     st.rerun()
 
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            if st.button("✅ Finalize Session Only", use_container_width=True):
-                session_id = st.session_state.active_recording_session_id
-
-                finalized = finalize_recording_session(session_id)
-
-                if finalized:
-                    st.success("Recording session finalized successfully.")
-                    st.session_state.active_recording_session_id = None
-                    st.session_state.active_chunk_index = 0
-                    st.switch_page("pages/03_My_Recordings.py")
-                else:
-                    st.error("Could not finalize recording session.")
-
-        with col_b:
-            if st.button("🗑️ Cancel Session", use_container_width=True):
-                st.session_state.active_recording_session_id = None
-                st.session_state.active_chunk_index = 0
-                st.warning("Recording session removed from this page.")
-
-    else:
-        st.info("Create a recording session first.")
+        else:
+            st.warning("No long recording yet.")
