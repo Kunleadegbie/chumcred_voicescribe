@@ -4,7 +4,6 @@ import av
 import numpy as np
 import streamlit as st
 from audiorecorder import audiorecorder
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
 
 from utils.auth import require_login, logout_user
 from utils.supabase_client import get_service_supabase_client
